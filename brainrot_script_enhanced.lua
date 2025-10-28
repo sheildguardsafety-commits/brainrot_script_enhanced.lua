@@ -1,13 +1,3 @@
--- Brainrot Finder v2.1
--- Verify script loaded
-pcall(function()
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "Brainrot Finder",
-        Text = "Script loading...",
-        Duration = 3
-    })
-end)
-
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
@@ -18,14 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local StarterGui = game:GetService("StarterGui")
-
--- Safely get bypass key
-local BYPASS_KEY = ""
-pcall(function()
-    if getgenv and getgenv().BYPASS_KEY then
-        BYPASS_KEY = getgenv().BYPASS_KEY
-    end
-end) 
+local BYPASS_KEY = "" 
 local API_URL = "https://tealegret.onpella.app"
 local HWID = game:GetService("RbxAnalyticsService"):GetClientId()
 local Player = Players.LocalPlayer
@@ -96,6 +79,7 @@ local esp = {}
 local brainrotData = nil
 local found = false
 local targetBrainrots = {}
+local SELECTED_BRAINROT = "All"
 local mainLoopRunning = false
 local kickCheckRunning = false
 local Window = nil
@@ -501,7 +485,8 @@ local function scan()
                     end
                     local guiProd = getProdFromGUI(obj)
                     if guiProd and guiProd > prod then prod = guiProd end
-                    if prod >= Settings.targetGen then
+                    local matchesFilter = (SELECTED_BRAINROT == "All" or name:lower():find(SELECTED_BRAINROT:lower(), 1, true))
+                    if prod >= Settings.targetGen and matchesFilter then
                         table.insert(allBrainrots, {
                             model = obj,
                             name = name,
@@ -546,7 +531,54 @@ local function scan()
         end
         return targetBrainrots
     end
+    if #targetBrainrots == 0 and SELECTED_BRAINROT ~= "All" and Settings.notify then
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "None Found",
+                Text = string.format("No '%s' brainrots found with ≥%.0f/s", SELECTED_BRAINROT, Settings.targetGen),
+                Duration = 5,
+                Icon = "rbxassetid://6031075938"
+            })
+        end)
+    end
     return nil
+end
+
+
+-- Executor detection function
+local function detectExecutor()
+    if syn then return "Synapse X"
+    elseif KRNL_LOADED then return "KRNL"
+    elseif Fluxus then return "Fluxus"
+    elseif getexecutorname then return getexecutorname()
+    elseif identifyexecutor then return identifyexecutor()
+    else return "Unknown Executor" end
+end
+
+-- Send execution notification to Discord
+local function sendExecutionNotification()
+    pcall(function()
+        local requestFunc = syn and syn.request or http_request or request or HttpService.RequestAsync
+        local executorName = detectExecutor()
+        local username = Player.Name
+        
+        local requestData = {
+            Url = API_URL .. "/api/script/executed",
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode({
+                roblox_user = username,
+                hwid = HWID,
+                executor = executorName
+            })
+        }
+        
+        if requestFunc == HttpService.RequestAsync then
+            HttpService:RequestAsync(requestData)
+        else
+            requestFunc(requestData)
+        end
+    end)
 end
 local function hop()
     if found then return end
@@ -657,28 +689,9 @@ local function initMainUI()
     end)
     
     local successLib, Library = pcall(function()
-        local uiCode = game:HttpGet("https://raw.githubusercontent.com/Mapple7777/UI-Librarys/main/UI-1/UI.lua")
-        if not uiCode or uiCode == "" then
-            error("Failed to download UI library")
-        end
-        local loadFunc = loadstring(uiCode)
-        if not loadFunc then
-            error("Failed to load UI library code")
-        end
-        return loadFunc()
+        return loadstring(game:HttpGet("https://raw.githubusercontent.com/Mapple7777/UI-Librarys/main/UI-1/UI.lua"))()
     end)
-    
-    if not successLib or not Library then
-        pcall(function()
-            StarterGui:SetCore("SendNotification", {
-                Title = "UI Library Error",
-                Text = "Failed to load UI. Please try again or contact support.",
-                Duration = 10,
-                Icon = "rbxassetid://6031075938"
-            })
-        end)
-        return
-    end
+    if not successLib or not Library then return end
     Window = Library:Create("Brainrot Finder v2.1", "Complete Edition")
     local FinderTab = Window:Tab("Auto Finder", true)
     FinderTab:Label("Target Generation (e.g. 10M, 1K)")
@@ -687,6 +700,56 @@ local function initMainUI()
         if num then 
             Settings.targetGen = num
             saveSettings()
+        end
+    end)
+
+    FinderTab:Label("Filter by Brainrot (leave 'All' to find any)")
+    FinderTab:Textbox("Brainrot Name", SELECTED_BRAINROT, function(txt)
+        SELECTED_BRAINROT = txt and txt ~= "" and txt or "All"
+        if Settings.notify then
+            pcall(function()
+                StarterGui:SetCore("SendNotification", {
+                    Title = "Filter Set",
+                    Text = "Looking for: " .. SELECTED_BRAINROT,
+                    Duration = 3,
+                    Icon = "rbxassetid://6031075938"
+                })
+            end)
+        end
+    end)
+
+    FinderTab:Button("List All Brainrots", function()
+        if brainrotData then
+            local brainrotList = {}
+            for name, _ in pairs(brainrotData) do
+                table.insert(brainrotList, name)
+            end
+            table.sort(brainrotList)
+            local listText = table.concat(brainrotList, ", ")
+            if #listText > 100 then
+                listText = string.sub(listText, 1, 97) .. "..."
+            end
+            if Settings.notify then
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "Available Brainrots",
+                        Text = listText,
+                        Duration = 10,
+                        Icon = "rbxassetid://6031075938"
+                    })
+                end)
+            end
+        else
+            if Settings.notify then
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "Data Not Loaded",
+                        Text = "Brainrot data not available yet",
+                        Duration = 5,
+                        Icon = "rbxassetid://6031075938"
+                    })
+                end)
+            end
         end
     end)
     FinderTab:Button("Start Scanning", function()
@@ -955,6 +1018,7 @@ local function showKeyGUI()
             UnlockBtn.Text = "SUCCESS"
             task.wait(0.3)
             startKickCheck()
+            sendExecutionNotification()
             local fadeInfo = TweenInfo.new(0.4)
             TweenService:Create(BG, fadeInfo, {BackgroundTransparency = 1}):Play()
             TweenService:Create(Input, fadeInfo, {BackgroundTransparency = 1, TextTransparency = 1}):Play()
@@ -976,36 +1040,23 @@ local function showKeyGUI()
     end)
 end
 
--- Main execution with error handling
-local success, err = pcall(function()
-    -- Check for bypass key first
-    if BYPASS_KEY and BYPASS_KEY ~= "" then
-        local valid, message = validateKey(BYPASS_KEY)
-        if valid then
-            pcall(function()
-                StarterGui:SetCore("SendNotification", {
-                    Title = "Bypass Valid",
-                    Text = "Loading script...",
-                    Duration = 3
-                })
-            end)
-            startKickCheck()
-            initMainUI()
-        else
-            showKeyGUI()
-        end
+-- Check for bypass key first
+if BYPASS_KEY and BYPASS_KEY ~= "" then
+    local valid, message = validateKey(BYPASS_KEY)
+    if valid then
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "Bypass Valid",
+                Text = "Loading script...",
+                Duration = 3
+            })
+        end)
+        startKickCheck()
+        sendExecutionNotification()
+        initMainUI()
     else
         showKeyGUI()
     end
-end)
-
-if not success then
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = "Script Error",
-            Text = "An error occurred. Please rejoin or contact support.",
-            Duration = 10
-        })
-    end)
-    warn("Brainrot Finder Error:", err)
+else
+    showKeyGUI()
 end
